@@ -2,6 +2,7 @@
 import { Command } from 'commander';
 import { GitHubActionsConnector } from '../../../packages/connectors/github-actions/index.js';
 import type { CiConnector, CiConnectorContext } from '../../../packages/connectors/src/ci-connector.js';
+import { formatTriageReport, triageFailure } from '../../../packages/triage-engine/index.js';
 
 const program = new Command();
 
@@ -16,7 +17,8 @@ program
   .requiredOption('--provider <provider>', 'CI provider')
   .requiredOption('--repository <repository>', 'Repository or project identifier')
   .requiredOption('--run-id <runId>', 'Pipeline run identifier')
-  .action(async (options: { provider: string; repository: string; runId: string }) => {
+  .option('--json', 'Emit machine-readable JSON', false)
+  .action(async (options: { provider: string; repository: string; runId: string; json?: boolean }) => {
     try {
       const connector = createConnector(options.provider);
       const context: CiConnectorContext = {
@@ -31,15 +33,35 @@ program
         connector.getArtifacts(context)
       ]);
 
-      console.log(JSON.stringify({
-        provider: connector.provider,
+      const { evidence, result } = triageFailure({
         pipelineRun: {
           ...pipelineRun,
           jobs
         },
+        jobs,
         logs,
         artifacts
-      }, null, 2));
+      });
+
+      if (options.json) {
+        console.log(JSON.stringify({
+          provider: connector.provider,
+          pipelineRun: evidence.pipelineRun,
+          evidence: {
+            failedJobs: evidence.failedJobs,
+            failedSteps: evidence.failedSteps,
+            testsAppearedToFail: evidence.testsAppearedToFail,
+            pipelineStageType: evidence.pipelineStageType,
+            logExcerpts: evidence.logExcerpts,
+            detectedErrorSignatures: evidence.detectedErrorSignatures,
+            artifacts: evidence.artifacts
+          },
+          triage: result
+        }, null, 2));
+        return;
+      }
+
+      console.log(formatTriageReport(evidence, result));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(message);
