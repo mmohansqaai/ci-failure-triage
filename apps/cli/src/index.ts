@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
+import { GitHubActionsConnector } from '../../../packages/connectors/github-actions/index.js';
+import type { CiConnector, CiConnectorContext } from '../../../packages/connectors/src/ci-connector.js';
 
 const program = new Command();
 
@@ -14,17 +16,43 @@ program
   .requiredOption('--provider <provider>', 'CI provider')
   .requiredOption('--repository <repository>', 'Repository or project identifier')
   .requiredOption('--run-id <runId>', 'Pipeline run identifier')
-  .action((options) => {
-    console.log(JSON.stringify({
-      status: 'NOT_IMPLEMENTED',
-      phase: 'PHASE_0',
-      message: 'CLI contract is ready. Provider connectivity starts in Phase 1.',
-      request: {
-        provider: options.provider,
+  .action(async (options: { provider: string; repository: string; runId: string }) => {
+    try {
+      const connector = createConnector(options.provider);
+      const context: CiConnectorContext = {
         repository: options.repository,
-        runId: options.runId
-      }
-    }, null, 2));
+        runId: String(options.runId)
+      };
+
+      const [pipelineRun, jobs, logs, artifacts] = await Promise.all([
+        connector.getPipelineRun(context),
+        connector.getJobs(context),
+        connector.getLogs(context),
+        connector.getArtifacts(context)
+      ]);
+
+      console.log(JSON.stringify({
+        provider: connector.provider,
+        pipelineRun: {
+          ...pipelineRun,
+          jobs
+        },
+        logs,
+        artifacts
+      }, null, 2));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(message);
+      process.exitCode = 1;
+    }
   });
+
+function createConnector(provider: string): CiConnector {
+  if (provider === 'github-actions') {
+    return new GitHubActionsConnector();
+  }
+
+  throw new Error(`Provider not implemented: ${provider}`);
+}
 
 program.parse();
