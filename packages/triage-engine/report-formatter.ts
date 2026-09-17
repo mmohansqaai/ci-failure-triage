@@ -1,9 +1,11 @@
 import type { PipelineStatus, TriageResult } from '../contracts/src/index.js';
 import type { NormalizedFailureEvidence } from '../evidence/evidence-types.js';
+import { selectHumanReadableEvidence } from './human-evidence.js';
 
 export function formatTriageReport(
   evidence: NormalizedFailureEvidence,
-  result: TriageResult
+  result: TriageResult,
+  analysisMode: 'DETERMINISTIC' | 'AI_ASSISTED' = 'DETERMINISTIC'
 ): string {
   const primary = evidence.failedSteps[0];
   const failedJob = primary?.jobName ?? evidence.failedJobs[0]?.name ?? 'Unknown';
@@ -25,6 +27,9 @@ export function formatTriageReport(
     'Pipeline Status:',
     formatPipelineStatus(evidence.pipelineRun.status),
     '',
+    'Analysis Mode:',
+    analysisMode,
+    '',
     'Failed Job:',
     failedJob,
     '',
@@ -44,7 +49,7 @@ export function formatTriageReport(
     result.probableCause,
     '',
     'Evidence:',
-    ...formatEvidenceLines(result),
+    ...formatEvidenceLines(result, evidence),
     '',
     'Recommended Action:',
     result.recommendedAction,
@@ -79,10 +84,11 @@ function formatConfidence(confidence: number): string {
   return `${Math.round(percent)}%`;
 }
 
-function formatEvidenceLines(result: TriageResult): string[] {
-  if (result.evidence.length === 0) {
+function formatEvidenceLines(result: TriageResult, collected: NormalizedFailureEvidence): string[] {
+  const selected = selectHumanReadableEvidence(result, collected);
+  if (selected.length === 0) {
     return ['- None'];
   }
 
-  return result.evidence.map((item) => `- ${item.summary}`);
+  return selected.map((item) => `- ${item.summary}`);
 }

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
+import { applyAiFallback } from '../../../packages/ai/index.js';
 import { GitHubActionsConnector } from '../../../packages/connectors/github-actions/index.js';
 import type { CiConnector, CiConnectorContext } from '../../../packages/connectors/src/ci-connector.js';
 import { formatTriageReport, triageFailure } from '../../../packages/triage-engine/index.js';
@@ -33,7 +34,7 @@ program
         connector.getArtifacts(context)
       ]);
 
-      const { evidence, result } = triageFailure({
+      const deterministic = triageFailure({
         pipelineRun: {
           ...pipelineRun,
           jobs
@@ -43,25 +44,31 @@ program
         artifacts
       });
 
+      const { result, analysisMode } = await applyAiFallback({
+        evidence: deterministic.evidence,
+        deterministic: deterministic.result
+      });
+
       if (options.json) {
         console.log(JSON.stringify({
           provider: connector.provider,
-          pipelineRun: evidence.pipelineRun,
+          analysisMode,
+          pipelineRun: deterministic.evidence.pipelineRun,
           evidence: {
-            failedJobs: evidence.failedJobs,
-            failedSteps: evidence.failedSteps,
-            testsAppearedToFail: evidence.testsAppearedToFail,
-            pipelineStageType: evidence.pipelineStageType,
-            logExcerpts: evidence.logExcerpts,
-            detectedErrorSignatures: evidence.detectedErrorSignatures,
-            artifacts: evidence.artifacts
+            failedJobs: deterministic.evidence.failedJobs,
+            failedSteps: deterministic.evidence.failedSteps,
+            testsAppearedToFail: deterministic.evidence.testsAppearedToFail,
+            pipelineStageType: deterministic.evidence.pipelineStageType,
+            logExcerpts: deterministic.evidence.logExcerpts,
+            detectedErrorSignatures: deterministic.evidence.detectedErrorSignatures,
+            artifacts: deterministic.evidence.artifacts
           },
           triage: result
         }, null, 2));
         return;
       }
 
-      console.log(formatTriageReport(evidence, result));
+      console.log(formatTriageReport(deterministic.evidence, result, analysisMode));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(message);

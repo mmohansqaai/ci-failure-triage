@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { Artifact, PipelineJob, PipelineRun, PipelineStatus } from '../packages/contracts/src/index.js';
 import { collectFailureEvidence } from '../packages/evidence/index.js';
-import { formatTriageReport, triageFailure } from '../packages/triage-engine/index.js';
+import {
+  formatTriageReport,
+  MAX_HUMAN_READABLE_EVIDENCE,
+  selectHumanReadableEvidence,
+  triageFailure
+} from '../packages/triage-engine/index.js';
 
 function buildInput(options: {
   pipelineName?: string;
@@ -265,11 +270,68 @@ curl: (28) Operation timed out after 30000 milliseconds with 0 bytes received
     expect(report).toContain('Pipeline:\nPlaywright Tests');
     expect(report).toContain('Run:\n18882');
     expect(report).toContain('Pipeline Status:\nFAILED');
+    expect(report).toContain('Analysis Mode:\nDETERMINISTIC');
     expect(report).toContain('Failed Job:\nPlaywright Tests');
     expect(report).toContain('Failed Step:\nPublish results to dashboard');
     expect(report).toContain('Classification:\nCI_INFRASTRUCTURE');
     expect(report).toContain('Subtype:\nDOWNSTREAM_SERVICE_UNAVAILABLE');
     expect(report).toContain('Human Review Required:\nNO');
     expect(report).toMatch(/Test execution did not fail/i);
+  });
+
+  it('ranks signature and failed-step evidence first and hides generic setup lines', () => {
+    const { evidence, result } = triageFailure(
+      buildInput({
+        pipelineName: 'Playwright Tests',
+        jobName: 'Playwright Tests',
+        runId: '18882',
+        steps: playwrightJobSteps,
+        artifacts: [{ id: '11', name: 'playwright-report' }],
+        log: `
+Set up job
+Getting GitHub token
+##[group]Run actions/setup-node@v4
+Download action repository 'actions/checkout@v4'
+Run Playwright tests
+12 passed (1.2m)
+Publish results to dashboard
+Checking dashboard health...
+curl: (28) Operation timed out after 30000 milliseconds with 0 bytes received
+##[error]Process completed with exit code 28.
+Checking dashboard health...
+curl: (28) Operation timed out after 30000 milliseconds with 0 bytes received
+##[error]Process completed with exit code 28.
+`
+      })
+    );
+
+    const rawSummaries = result.evidence.map((item) => item.summary);
+    expect(rawSummaries.some((summary) => /Getting GitHub token/i.test(summary))).toBe(true);
+
+    const selected = selectHumanReadableEvidence(result, evidence);
+    const selectedSummaries = selected.map((item) => item.summary);
+
+    expect(selected.length).toBeGreaterThan(0);
+    expect(selected.length).toBeLessThanOrEqual(MAX_HUMAN_READABLE_EVIDENCE);
+    expect(selected.length).toBeLessThan(rawSummaries.length);
+    expect(selectedSummaries.join('\n')).not.toMatch(/Getting GitHub token/i);
+    expect(selectedSummaries.join('\n')).not.toMatch(/Run actions\/setup-node/i);
+    expect(selectedSummaries.some((summary) => /curl: \(28\)|exit code 28|health-check timeout/i.test(summary))).toBe(true);
+
+    const firstStrongIndex = selectedSummaries.findIndex((summary) =>
+      /curl: \(28\)|exit code 28|health-check timeout|Failed step "Publish results to dashboard"/i.test(summary)
+    );
+    const setupIndex = selectedSummaries.findIndex((summary) => /token|setup-node|checkout/i.test(summary));
+    expect(firstStrongIndex).toBeGreaterThanOrEqual(0);
+    if (setupIndex >= 0) {
+      expect(firstStrongIndex).toBeLessThan(setupIndex);
+    }
+
+    const report = formatTriageReport(evidence, result);
+    const evidenceSection = report.split('Evidence:\n')[1]?.split('\nRecommended Action:')[0] ?? '';
+    const evidenceLines = evidenceSection.split('\n').filter((line) => line.startsWith('- '));
+    expect(evidenceLines.length).toBeLessThanOrEqual(MAX_HUMAN_READABLE_EVIDENCE);
+    expect(evidenceSection).toMatch(/curl: \(28\)|health-check timeout|exit code 28/i);
+    expect(evidenceSection).not.toMatch(/Getting GitHub token/i);
   });
 });
