@@ -1,7 +1,7 @@
 import type { EvidenceReference, TriageResult } from '../contracts/src/index.js';
 import { collectFailureEvidence } from '../evidence/evidence-collector.js';
 import type { EvidenceInput, NormalizedFailureEvidence } from '../evidence/evidence-types.js';
-import { evaluateRules, type RuleMatch } from './rule-engine.js';
+import { evaluateAllRules, type RuleMatch } from './rule-engine.js';
 
 export interface TriageEngineOutput {
   evidence: NormalizedFailureEvidence;
@@ -10,23 +10,34 @@ export interface TriageEngineOutput {
 
 export function triageFailure(input: EvidenceInput): TriageEngineOutput {
   const evidence = collectFailureEvidence(input);
-  const match = evaluateRules(evidence);
+  const matches = evaluateAllRules(evidence);
   return {
     evidence,
-    result: match ? toMatchedResult(match, evidence) : toUnknownResult(evidence)
+    result: matches[0] ? toMatchedResult(matches, evidence) : toUnknownResult(evidence)
   };
 }
 
-function toMatchedResult(match: RuleMatch, evidence: NormalizedFailureEvidence): TriageResult {
+function toMatchedResult(matches: RuleMatch[], evidence: NormalizedFailureEvidence): TriageResult {
+  const winner = matches[0];
+  if (!winner) {
+    return toUnknownResult(evidence);
+  }
+
+  const extraClassifications = distinctRelatedFailures(matches);
+  const mixed = extraClassifications.length > 0;
+
   return {
     id: triageId(evidence),
-    classification: match.signature.classification,
-    subtype: match.signature.subtype,
-    confidence: match.signature.confidence,
-    probableCause: match.signature.probableCause,
-    evidence: buildEvidenceReferences(evidence, match),
-    recommendedAction: match.signature.recommendedAction,
-    humanReviewRequired: match.signature.humanReviewRequired,
+    classification: winner.signature.classification,
+    subtype: winner.signature.subtype,
+    confidence: mixed ? Math.min(winner.signature.confidence, 0.72) : winner.signature.confidence,
+    probableCause: mixed ? mixedProbableCause(matches) : winner.signature.probableCause,
+    evidence: buildEvidenceReferences(evidence, matches),
+    recommendedAction: mixed
+      ? `${winner.signature.recommendedAction} Other failed tests appear to have different root causes and need separate review.`
+      : winner.signature.recommendedAction,
+    humanReviewRequired: mixed ? true : winner.signature.humanReviewRequired,
+    relatedFailures: extraClassifications.length > 0 ? extraClassifications : undefined,
     createdAt: new Date().toISOString()
   };
 }
@@ -51,7 +62,7 @@ function triageId(evidence: NormalizedFailureEvidence): string {
 
 function buildEvidenceReferences(
   evidence: NormalizedFailureEvidence,
-  match?: RuleMatch
+  matches: RuleMatch[] = []
 ): EvidenceReference[] {
   const references: EvidenceReference[] = [];
   const primary = evidence.failedSteps[0];
@@ -111,11 +122,26 @@ function buildEvidenceReferences(
     });
   }
 
-  if (match) {
+  if (matches[0]) {
     references.push({
       source: 'rule',
-      summary: `Matched signature ${match.signature.id} (${match.signature.subtype})`,
-      locator: match.signature.id
+      summary: `Matched signature ${matches[0].signature.id} (${matches[0].signature.subtype})`,
+      locator: matches[0].signature.id
+    });
+  }
+
+  for (const extra of matches.slice(1)) {
+    references.push({
+      source: 'rule',
+      summary: `Also matched ${extra.signature.classification}/${extra.signature.subtype}`,
+      locator: extra.signature.id
+    });
+  }
+
+  for (const testName of extractFailedPlaywrightTests(evidence.combinedLogText).slice(0, 5)) {
+    references.push({
+      source: 'tests',
+      summary: `Failed Playwright test: ${testName}`
     });
   }
 
@@ -128,6 +154,57 @@ function buildEvidenceReferences(
   }
 
   return references;
+}
+
+function distinctRelatedFailures(matches: RuleMatch[]): string[] {
+  const winner = matches[0];
+  if (!winner) {
+    return [];
+  }
+
+  const seen = new Set<string>([`${winner.signature.classification}/${winner.signature.subtype}`]);
+  const related: string[] = [];
+
+  for (const match of matches.slice(1)) {
+    const key = `${match.signature.classification}/${match.signature.subtype}`;
+    if (seen.has(key) || match.signature.classification === winner.signature.classification) {
+      continue;
+    }
+    seen.add(key);
+    related.push(key);
+  }
+
+  return related;
+}
+
+function mixedProbableCause(matches: RuleMatch[]): string {
+  const winner = matches[0];
+  const labels: string[] = [];
+  const seen = new Set<string>();
+
+  for (const match of matches) {
+    if (seen.has(match.signature.classification)) {
+      continue;
+    }
+    seen.add(match.signature.classification);
+    labels.push(`${match.signature.classification}/${match.signature.subtype}`);
+  }
+
+  return `Multiple distinct failures were found (${labels.join('; ')}). Primary signal: ${winner?.signature.probableCause ?? 'insufficient evidence'}`;
+}
+
+function extractFailedPlaywrightTests(logText: string): string[] {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const match of logText.matchAll(/^\s*\d+\)\s+\[[^\]]+\]\s+›\s+(.+)$/gm)) {
+    const name = match[1]?.trim();
+    if (!name || seen.has(name)) {
+      continue;
+    }
+    seen.add(name);
+    names.push(name);
+  }
+  return names;
 }
 
 function isPublishingStage(stage: NormalizedFailureEvidence['pipelineStageType']): boolean {

@@ -7,6 +7,10 @@ export interface RuleMatch {
 }
 
 export function evaluateRules(evidence: NormalizedFailureEvidence): RuleMatch | undefined {
+  return evaluateAllRules(evidence)[0];
+}
+
+export function evaluateAllRules(evidence: NormalizedFailureEvidence): RuleMatch[] {
   const haystack = buildHaystack(evidence);
   const matches: RuleMatch[] = [];
 
@@ -36,7 +40,18 @@ export function evaluateRules(evidence: NormalizedFailureEvidence): RuleMatch | 
     return right.signature.confidence - left.signature.confidence;
   });
 
-  return matches[0];
+  return uniqueSignatures(matches);
+}
+
+function uniqueSignatures(matches: RuleMatch[]): RuleMatch[] {
+  const seen = new Set<string>();
+  return matches.filter((match) => {
+    if (seen.has(match.signature.id)) {
+      return false;
+    }
+    seen.add(match.signature.id);
+    return true;
+  });
 }
 
 function buildHaystack(evidence: NormalizedFailureEvidence): string {

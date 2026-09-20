@@ -240,6 +240,90 @@ api.internal returned 503 Service Unavailable
     expect(result.classification).toBe('ENVIRONMENT');
     expect(result.classification).not.toBe('AUTOMATION_DEFECT');
   });
+
+  it('does not classify a failed Playwright step as automation without a specific signature', () => {
+    const { result } = triageFailure(
+      buildInput({
+        jobName: 'Run tests (Ubuntu)',
+        steps: [
+          { name: 'Set up job', status: 'success' },
+          { name: 'Setup Node', status: 'success' },
+          { name: 'Run Playwright tests', status: 'failure' },
+          { name: 'Upload HTML report', status: 'success' }
+        ],
+        log: `
+##[group]Run npx playwright test
+DEMO_DASHBOARD_FAILURES: 0
+(node:2225) [DEP0169] DeprecationWarning: url.parse() behavior is not standardized
+##[error]Process completed with exit code 1.
+`
+      })
+    );
+
+    expect(result.classification).toBe('UNKNOWN');
+    expect(result.subtype).not.toBe('PLAYWRIGHT_TEST_FAILURE');
+    expect(result.humanReviewRequired).toBe(true);
+  });
+
+  it('splits the SelfHealing Playwright demo run into mixed environment, automation, and product failures', () => {
+    const noisyPrefix = Array.from({ length: 20 }, () => 'DEMO_DASHBOARD_FAILURES: 0').join('\n');
+    const { evidence, result } = triageFailure(
+      buildInput({
+        pipelineName: 'Playwright Tests',
+        jobName: 'Run tests (Ubuntu)',
+        runId: '35502326185',
+        artifacts: [{ id: '11', name: 'playwright-report' }],
+        steps: [
+          { name: 'Set up job', status: 'success' },
+          { name: 'Checkout', status: 'success' },
+          { name: 'Setup Node', status: 'success' },
+          { name: 'Install dependencies', status: 'success' },
+          { name: 'Install Playwright browsers (with OS deps)', status: 'success' },
+          { name: 'Run Playwright tests', status: 'failure' },
+          { name: 'Upload HTML report', status: 'success' },
+          { name: 'Publish results to dashboard (multipart curl)', status: 'success' }
+        ],
+        log: `
+${noisyPrefix}
+(node:2225) [DEP0169] DeprecationWarning: url.parse() behavior is not standardized and prone to errors
+  1) [chromium] › tests/triage-demo-failure.spec.ts:14:7 › Triage demo (intentional fail) › home page shows checkout promo that does not exist @triage-demo-failure
+    Error: expect(locator).toBeVisible() failed
+    Locator: getByRole('heading', { name: 'Flash checkout: everything $0.01' })
+    Expected: visible
+    Timeout: 8000ms
+    Error: element(s) not found
+      - waiting for getByRole('heading', { name: 'Flash checkout: everything $0.01' })
+  2) [chromium] › tests/triage-demo-failure.spec.ts:23:7 › Triage demo (intentional fail) › document title still says Nova Retail @triage-demo-failure
+    Error: expect(received).toBe(expected) // Object.is equality
+    Expected: "Nova Retail"
+    Received: "BayOne Retail (Demo)"
+  3) [chromium] › tests/triage-demo-failure.spec.ts:28:7 › Triage demo (intentional fail) › product catalog request is connection-refused @triage-demo-failure
+    Error: page.goto: net::ERR_CONNECTION_REFUSED at https://retail-website-fawn.vercel.app/app/products
+  3 failed
+  3 passed (1.4m)
+##[error]Process completed with exit code 1.
+`
+      })
+    );
+
+    expect(result.classification).toBe('ENVIRONMENT');
+    expect(result.subtype).toBe('SERVICE_CONNECTION_REFUSED');
+    expect(result.humanReviewRequired).toBe(true);
+    expect(result.relatedFailures?.some((item) => item.startsWith('AUTOMATION_DEFECT/'))).toBe(true);
+    expect(result.relatedFailures).toContain('PRODUCT_DEFECT/ASSERTION_MISMATCH');
+    expect(result.probableCause).toMatch(/multiple distinct failures/i);
+    expect(result.probableCause).not.toMatch(/GitHub reports the Playwright test step failed/i);
+
+    const summaries = result.evidence.map((item) => item.summary).join('\n');
+    expect(summaries).toMatch(/ERR_CONNECTION_REFUSED|connection-refused/i);
+    expect(summaries).toMatch(/toBeVisible|element\(s\) not found|Flash checkout/i);
+    expect(summaries).toMatch(/Nova Retail|BayOne Retail/i);
+    expect(summaries).not.toMatch(/DEMO_DASHBOARD_FAILURES/i);
+
+    const report = formatTriageReport(evidence, result);
+    expect(report).toMatch(/CONNECTION_REFUSED|connection-refused|net::ERR_CONNECTION_REFUSED/i);
+    expect(report).not.toContain('PLAYWRIGHT_TEST_FAILURE');
+  });
 });
 
 describe('report formatter', () => {

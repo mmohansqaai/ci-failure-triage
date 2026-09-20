@@ -1,4 +1,4 @@
-export { collectFailureEvidence, inferPipelineStageType } from './evidence-collector.js';
+export { collectFailureEvidence, inferPipelineStageType, stripAnsi } from './evidence-collector.js';
 export type {
   EvidenceInput,
   FailedStepEvidence,

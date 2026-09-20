@@ -210,7 +210,8 @@ export const FAILURE_SIGNATURES: FailureSignature[] = [
       /ECONNREFUSED/,
       /connection refused/i,
       /net::ERR_CONNECTION_REFUSED/i,
-      /ERR_CONNECTION_REFUSED/
+      /ERR_CONNECTION_REFUSED/,
+      /page\.goto: net::ERR_CONNECTION_REFUSED/i
     ]
   },
   {
@@ -306,8 +307,10 @@ export const FAILURE_SIGNATURES: FailureSignature[] = [
     appliesTo: isTestStage,
     patterns: [
       /waiting for locator/i,
+      /waiting for getBy(?:Role|Text|Label|Placeholder|TestId)/i,
       /locator\.(?:click|fill|check|hover|press|waitFor)/i,
-      /Error: locator\s/i
+      /Error: locator\s/i,
+      /expect\(locator\)\.toBeVisible/i
     ]
   },
   {
@@ -322,9 +325,10 @@ export const FAILURE_SIGNATURES: FailureSignature[] = [
     appliesTo: isTestStage,
     patterns: [
       /resolved to 0 elements/i,
-      /element (?:is )?not (?:found|visible|attached)/i,
-      /error: element not found/i,
-      /no node found for selector/i
+      /element(?:\(s\))? (?:is )?not (?:found|visible|attached)/i,
+      /error: element(?:\(s\))? not found/i,
+      /no node found for selector/i,
+      /toBeVisible\(\) failed/i
     ]
   },
   {
@@ -340,7 +344,7 @@ export const FAILURE_SIGNATURES: FailureSignature[] = [
     patterns: [
       /expect\(received\)\.to(?:Be|Equal|StrictEqual|Contain)/i,
       /AssertionError/i,
-      /Expected:\s+.+\s+Received:/is
+      /Expected:\s+".+"\s+Received:\s+".+"/is
     ]
   }
 ];
